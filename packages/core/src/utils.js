@@ -109,6 +109,82 @@ export function getSchemaType(schema) {
   return type;
 }
 
+// detects whether a schema references itself recursively
+export function isCyclic(schema, rootSchema) {
+  const traversed = new Set();
+
+  /**
+   * Helper fn to recurse into children
+   * @param  {Array} children   The target array
+   * @return {Boolean}          Returns whether there was a cyclic event in the children
+   */
+  const checkChildren = children => {
+    return children.reduce((acc, child) => {
+      return Boolean(check(child) | acc);
+    }, false);
+  };
+
+  const check = schema => {
+    // handling of malformed data
+    if (typeof schema === "undefined" || typeof schema !== "object") {
+      return false;
+    }
+
+    if (traversed.has(schema)) {
+      return true;
+    }
+
+    traversed.add(schema);
+
+    if ("$ref" in schema) {
+      const refSchema = findSchemaDefinition(schema.$ref, rootSchema);
+      const result = check(refSchema);
+      traversed.delete(schema); // we need to delete here because siblings can refer to the same definition
+      return result;
+    }
+
+    if ("anyOf" in schema || "allOf" in schema || "oneOf" in schema) {
+      const result = checkChildren(
+        Object.values(schema.anyOf || schema.allOf || schema.oneOf)
+      );
+      traversed.delete(schema);
+      return result;
+    }
+
+    switch (schema.type) {
+      case "object": {
+        if (!schema.properties) {
+          traversed.delete(schema);
+          return false;
+        }
+        const result = checkChildren(Object.values(schema.properties));
+        traversed.delete(schema);
+        return result;
+      }
+      case "array": {
+        if (Array.isArray(schema.items)) {
+          const result = checkChildren(schema.items);
+          traversed.delete(schema);
+          return result;
+        } else {
+          const result = check(schema.items);
+          traversed.delete(schema);
+          return result;
+        }
+      }
+    }
+
+    // edge case to handle the scan at the root
+    if (schema === rootSchema && schema.definitions) {
+      return checkChildren(Object.values(schema.definitions));
+    }
+    traversed.delete(schema);
+    return false;
+  };
+
+  return check(schema);
+}
+
 export function getWidget(schema, widget, registeredWidgets = {}) {
   const type = getSchemaType(schema);
 
@@ -174,12 +250,14 @@ function computeDefaults(
   parentDefaults,
   rootSchema,
   rawFormData = {},
-  includeUndefinedValues = false
+  includeUndefinedValues = false,
+  refCountDict = {}
 ) {
   let schema = isObject(_schema) ? _schema : {};
   const formData = isObject(rawFormData) ? rawFormData : {};
   // Compute the defaults recursively: give highest priority to deepest nodes.
   let defaults = parentDefaults;
+
   if (isObject(defaults) && isObject(schema.default)) {
     // For object defaults, only override parent defaults that are defined in
     // schema.default.
@@ -190,12 +268,26 @@ function computeDefaults(
   } else if ("$ref" in schema) {
     // Use referenced schema defaults for this node.
     const refSchema = findSchemaDefinition(schema.$ref, rootSchema);
+    // if (isCyclic(schema, rootSchema)) {
+    //   return undefined;
+    // }
+    refCountDict[schema.$ref] === undefined
+      ? (refCountDict[schema.$ref] = 0)
+      : refCountDict[schema.$ref]++;
+    for (let k in refCountDict) {
+      if (refCountDict[k] > 1) {
+        // console.log('$ref maybe cyclic, we will stop here')
+        return (defaults = schema.default);
+      }
+    }
+
     return computeDefaults(
       refSchema,
       defaults,
       rootSchema,
       formData,
-      includeUndefinedValues
+      includeUndefinedValues,
+      refCountDict
     );
   } else if ("dependencies" in schema) {
     const resolvedSchema = resolveDependencies(schema, rootSchema, formData);
@@ -204,7 +296,8 @@ function computeDefaults(
       defaults,
       rootSchema,
       formData,
-      includeUndefinedValues
+      includeUndefinedValues,
+      refCountDict
     );
   } else if (isFixedItems(schema)) {
     defaults = schema.items.map((itemSchema, idx) =>
@@ -213,7 +306,8 @@ function computeDefaults(
         Array.isArray(parentDefaults) ? parentDefaults[idx] : undefined,
         rootSchema,
         formData,
-        includeUndefinedValues
+        includeUndefinedValues,
+        refCountDict
       )
     );
   } else if ("oneOf" in schema) {
@@ -240,7 +334,8 @@ function computeDefaults(
           (defaults || {})[key],
           rootSchema,
           (formData || {})[key],
-          includeUndefinedValues
+          includeUndefinedValues,
+          refCountDict
         );
         if (includeUndefinedValues || computedDefault !== undefined) {
           acc[key] = computedDefault;
@@ -987,24 +1082,59 @@ export function toIdSchema(
   id,
   rootSchema,
   formData = {},
-  idPrefix = "root"
+  idPrefix = "root",
+  refCountDict = {}
 ) {
   const idSchema = {
     $id: id || idPrefix,
   };
+
+  // if (isCyclic(schema, rootSchema)) {
+  //   return idSchema;
+  // }
   if ("$ref" in schema || "dependencies" in schema || "allOf" in schema) {
     const _schema = retrieveSchema(schema, rootSchema, formData);
-    return toIdSchema(_schema, id, rootSchema, formData, idPrefix);
+    refCountDict[schema.$ref] === undefined
+      ? (refCountDict[schema.$ref] = 0)
+      : refCountDict[schema.$ref]++;
+    for (let k in refCountDict) {
+      if (refCountDict[k] > 1) {
+        // console.log('$ref maybe cyclic, we will stop here')
+        return idSchema;
+      }
+    }
+    return toIdSchema(
+      _schema,
+      id,
+      rootSchema,
+      formData,
+      idPrefix,
+      refCountDict
+    );
   }
-  if ("items" in schema && !schema.items.$ref) {
-    return toIdSchema(schema.items, id, rootSchema, formData, idPrefix);
+  if ("items" in schema /*&& !schema.items.$ref*/) {
+    return toIdSchema(
+      schema.items,
+      id,
+      rootSchema,
+      formData,
+      idPrefix,
+      refCountDict
+    );
   }
-  if (schema.type !== "object") {
+  if (schema.type && schema.type !== "object") {
     return idSchema;
   }
   for (const name in schema.properties || {}) {
     const field = schema.properties[name];
     const fieldId = idSchema.$id + "_" + name;
+    let array = idSchema.$id.split("_");
+    for (let part of array) {
+      if (name === part) {
+        // console.log('$ref maybe cyclic, we will stop here')
+        return idSchema;
+      }
+    }
     idSchema[name] = toIdSchema(
       isObject(field) ? field : {},
       fieldId,
@@ -1012,7 +1142,8 @@ export function toIdSchema(
       // It's possible that formData is not an object -- this can happen if an
       // array item has just been added, but not populated with data yet
       (formData || {})[name],
-      idPrefix
+      idPrefix,
+      refCountDict
     );
   }
   return idSchema;

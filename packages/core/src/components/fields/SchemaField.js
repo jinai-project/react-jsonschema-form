@@ -237,6 +237,17 @@ function SchemaFieldRender(props) {
     wasPropertyKeyModified = false,
   } = props;
   const { rootSchema, fields, formContext } = registry;
+  // if (isCyclic(props.schema, rootSchema)) {
+  //   return null;
+  // }
+  if (props && props.schema && props.schema.$ref) {
+    console.log(props.schema.$ref);
+    // fold $ref object by default to avoid infinite $ref recursive
+    let options = uiSchema["ui:options"] || {};
+    options["foldable"] = true;
+    uiSchema["ui:options"] = options;
+  }
+
   const FieldTemplate =
     uiSchema["ui:FieldTemplate"] || registry.FieldTemplate || DefaultTemplate;
   let idSchema = props.idSchema;
