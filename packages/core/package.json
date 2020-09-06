@@ -1,6 +1,6 @@
 {
   "name": "@jinai/rjsf-core",
-  "version": "1.0.0",
+  "version": "0.5.1",
   "description": "A fork for @rjsf/core with support for circular referencing.",
   "scripts": {
     "build": "npm run dist:build:umd && npm run build:cjs && npm run build:es && npm run build:es:lib",

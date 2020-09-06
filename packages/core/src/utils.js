@@ -1128,13 +1128,13 @@ export function toIdSchema(
   for (const name in schema.properties || {}) {
     const field = schema.properties[name];
     const fieldId = idSchema.$id + "_" + name;
-    let array = idSchema.$id.split("_");
-    for (let part of array) {
-      if (name === part) {
-        // console.log('$ref maybe cyclic, we will stop here')
-        return idSchema;
-      }
-    }
+    // let array = idSchema.$id.split("_");
+    // for (let part of array) {
+    //   if (name === part) {
+    //     // console.log('$ref maybe cyclic, we will stop here')
+    //     return idSchema;
+    //   }
+    // }
     idSchema[name] = toIdSchema(
       isObject(field) ? field : {},
       fieldId,
