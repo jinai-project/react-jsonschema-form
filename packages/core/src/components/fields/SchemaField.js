@@ -241,7 +241,7 @@ function SchemaFieldRender(props) {
   //   return null;
   // }
   if (props && props.schema && props.schema.$ref) {
-    console.log(props.schema.$ref);
+    // console.log(props.schema.$ref);
     // fold $ref object by default to avoid infinite $ref recursive
     let options = uiSchema["ui:options"] || {};
     options["foldable"] = true;
